@@ -1251,6 +1251,8 @@
                 <option value="Б">Б</option>
                 <option value="В">В</option>
                 <option value="Г">Г</option>
+                <option value="В">В</option>
+                <option value="Г">Г</option>
                 <option value="Д">Д</option>
                 <option value="Е">Е</option>
               </select>
@@ -1798,30 +1800,19 @@
       if (!target.classes) target.classes = [];
       if (!target.schedule) target.schedule = [];
       if (!target.nextId) target.nextId = {};
-      const defaults = [
-        { name: '1А', teacherId: null },
-        { name: '1Б', teacherId: null },
-        { name: '2А', teacherId: null },
-        { name: '2Б', teacherId: null },
-        { name: '3А', teacherId: null },
-        { name: '3Б', teacherId: null },
-        { name: '4А', teacherId: null },
-        { name: '4Б', teacherId: null },
-        { name: '5А', teacherId: 2 },
-        { name: '5Б', teacherId: 5 },
-        { name: '6А', teacherId: 2 },
-        { name: '6Б', teacherId: null },
-        { name: '7А', teacherId: null },
-        { name: '7Б', teacherId: null },
-        { name: '8А', teacherId: null },
-        { name: '8Б', teacherId: null },
-        { name: '9А', teacherId: null },
-        { name: '9Б', teacherId: null },
-        { name: '10А', teacherId: 5 },
-        { name: '10Б', teacherId: 2 },
-        { name: '11А', teacherId: null },
-        { name: '11Б', teacherId: null }
-      ];
+      const letters = ['А', 'Б', 'В', 'Г'];
+      const defaults = [];
+      for (let g = 1; g <= 11; g++) {
+        letters.forEach(L => {
+          let teacherId = null;
+          if (g === 5 && L === 'А') teacherId = 2;
+          if (g === 5 && L === 'Б') teacherId = 5;
+          if (g === 6 && L === 'А') teacherId = 2;
+          if (g === 10 && L === 'А') teacherId = 5;
+          if (g === 10 && L === 'Б') teacherId = 2;
+          defaults.push({ name: String(g) + L, teacherId });
+        });
+      }
       const TIMES = ['08:30–09:15', '09:25–10:10', '10:30–11:15', '11:25–12:10', '12:20–13:05'];
       const ROOMS = ['101', '105', '201', '208', '312', '401', '115', '220', '305', '118'];
       const patterns = [
@@ -3311,6 +3302,55 @@
       navigate('schedule');
     }
 
+    /** Разбор названия класса: "10А" → { grade: 10, letter: "А" } */
+    function parseClassName(name) {
+      const m = String(name || '').trim().match(/^(\d{1,2})\s*([А-Яа-яA-Za-z])$/);
+      if (!m) return { grade: null, letter: null };
+      return { grade: +m[1], letter: m[2].toUpperCase() };
+    }
+
+    function sortClassIdsByGrade(ids) {
+      return ids.slice().sort((a, b) => {
+        const na = getClass(a)?.name || '';
+        const nb = getClass(b)?.name || '';
+        const pa = parseClassName(na);
+        const pb = parseClassName(nb);
+        if (pa.grade != null && pb.grade != null && pa.grade !== pb.grade) return pa.grade - pb.grade;
+        if (pa.letter && pb.letter && pa.letter !== pb.letter) return pa.letter.localeCompare(pb.letter, 'ru');
+        return na.localeCompare(nb, 'ru', { numeric: true });
+      });
+    }
+
+    function setScheduleGrade(grade) {
+      window._scheduleGrade = +grade;
+      const ids = getMyScheduleClassIds();
+      const match = ids.find(cid => parseClassName(getClass(cid)?.name || '').grade === +grade);
+      if (match) window._scheduleClassId = match;
+      navigate('schedule');
+    }
+
+    function setScheduleLetter(letter) {
+      const grade = window._scheduleGrade;
+      const ids = getMyScheduleClassIds();
+      const L = String(letter).toUpperCase();
+      let match = null;
+      if (grade != null) {
+        match = ids.find(cid => {
+          const p = parseClassName(getClass(cid)?.name || '');
+          return p.grade === +grade && p.letter === L;
+        });
+      }
+      if (!match) {
+        match = ids.find(cid => parseClassName(getClass(cid)?.name || '').letter === L);
+      }
+      if (match) {
+        window._scheduleClassId = match;
+        const p = parseClassName(getClass(match)?.name || '');
+        if (p.grade != null) window._scheduleGrade = p.grade;
+      }
+      navigate('schedule');
+    }
+
     function filterLessonsForUser(lessons) {
       if (isTeacherApproved(currentUser) && !canEditSchool()) {
         const classId = getSelectedScheduleClassId();
@@ -4028,15 +4068,57 @@
       }
       html += `</div>`;
 
-      // Переключатель классов, если их несколько
-      if (myClassIds.length > 1) {
-        html += `<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">`;
-        myClassIds.forEach(cid => {
-          const cn = getClass(cid)?.name || cid;
-          const active = cid === classId;
-          html += `<button class="btn ${active ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="setScheduleClassId(${cid})">${escapeHtml(String(cn))}</button>`;
+      // Выбор класса: сначала номер (1…11), затем буква (А Б В Г)
+      if (myClassIds.length >= 1) {
+        const sortedIds = sortClassIdsByGrade(myClassIds);
+        const grades = [];
+        const gradeSet = new Set();
+        sortedIds.forEach(cid => {
+          const g = parseClassName(getClass(cid)?.name || '').grade;
+          if (g != null && !gradeSet.has(g)) { gradeSet.add(g); grades.push(g); }
         });
-        html += `</div>`;
+        grades.sort((a, b) => a - b);
+
+        const curParsed = parseClassName(getClass(classId)?.name || '');
+        if (window._scheduleGrade == null && curParsed.grade != null) {
+          window._scheduleGrade = curParsed.grade;
+        }
+        let activeGrade = window._scheduleGrade;
+        if (activeGrade == null || !grades.includes(activeGrade)) {
+          activeGrade = grades[0];
+          window._scheduleGrade = activeGrade;
+        }
+
+        const lettersForGrade = [];
+        const letterSet = new Set();
+        sortedIds.forEach(cid => {
+          const p = parseClassName(getClass(cid)?.name || '');
+          if (p.grade === activeGrade && p.letter && !letterSet.has(p.letter)) {
+            letterSet.add(p.letter);
+            lettersForGrade.push({ letter: p.letter, id: cid });
+          }
+        });
+        lettersForGrade.sort((a, b) => a.letter.localeCompare(b.letter, 'ru'));
+
+        html += `<div style="margin-bottom:14px;">
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">Класс (номер)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">`;
+        grades.forEach(g => {
+          const active = g === activeGrade;
+          html += `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-secondary'} btn-sm" style="min-width:2.4rem;" onclick="setScheduleGrade(${g})">${g}</button>`;
+        });
+        html += `</div>
+          <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:6px;">Буква</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">`;
+        if (!lettersForGrade.length) {
+          html += `<span style="color:var(--text-muted);font-size:0.9rem;">Нет параллелей для этого номера</span>`;
+        } else {
+          lettersForGrade.forEach(({ letter, id }) => {
+            const active = id === classId;
+            html += `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-secondary'} btn-sm" style="min-width:2.4rem;" onclick="setScheduleClassId(${id})">${escapeHtml(letter)}</button>`;
+          });
+        }
+        html += `</div></div>`;
       }
 
       if (canEdit) {
